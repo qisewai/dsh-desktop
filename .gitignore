@@ -1,0 +1,8 @@
+# 编译 / 打包产物
+/dsh-desktop
+/dsh-desktop.exe
+/dist/
+/build/
+*.AppImage
+# 打包时由 tools/genicon 生成
+/resources/

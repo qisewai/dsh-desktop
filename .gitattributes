@@ -1,0 +1,4 @@
+# 统一 LF：Windows 上 checkout 出 CRLF 的 .sh 在 Git Bash/WSL 里跑不了
+* text=auto eol=lf
+*.png binary
+*.zstd binary

@@ -1,0 +1,10 @@
+{
+  "name": "DSH Desktop",
+  "version": "0.1.1",
+  "linux": {
+    "comment": "DeepSeek Harness 桌面壳",
+    "categories": ["Development"],
+    "depends": ["libayatana-appindicator3-1"],
+    "command": "dsh-desktop"
+  }
+}
