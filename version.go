@@ -19,7 +19,7 @@ const (
 	testedDshVersion = "0.2.1-rc.2"
 )
 
-const upgradeHint = "升级：npm i -g @deepseek-ai/dsh@latest（全局装在 /usr 下的话要 sudo），升级后点「重试」。\n" +
+const upgradeHint = "升级：npm i -g @deepseek-ai/dsh@latest（Linux 上全局装在 /usr 下的话要 sudo），升级后点「重试」。\n" +
 	"确定要跳过检查可加 -skip-version-check 启动。"
 
 // versionCheck 是一次检查的结论。tooOld 时不该启动；warn 非空时照常启动但要告诉用户。
@@ -32,7 +32,9 @@ type versionCheck struct {
 func checkDshVersion(ctx context.Context, bin string) versionCheck {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, bin, "--version").Output()
+	cmd := exec.CommandContext(ctx, bin, "--version")
+	hideConsole(cmd)
+	out, err := cmd.Output()
 	if err != nil {
 		return versionCheck{warn: fmt.Sprintf("读不到 dsh 版本（%v），跳过兼容性检查", err)}
 	}

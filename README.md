@@ -33,6 +33,17 @@ AppImage 和 install.sh 装的版本别同时用：它们共用设置和单实�
 
 版本号在 `mygo.json` 里改。打包用的 `mygo` 命令行工具已经作为 `go tool` 写进 `go.mod`，不用另装。注意 `mygo build` 每次会清空 `dist/linux-amd64/`。
 
+### Windows
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\打包.ps1    # 生成图标 + mygo build，产物在 dist\windows-amd64\
+```
+
+- `DSH Desktop Setup <版本> amd64.exe`：NSIS 安装包，装到 `%LOCALAPPDATA%\Programs\DSH Desktop`，不要管理员权限，建开始菜单快捷方式、注册 `dsh://`，在「设置 → 应用」里可卸载。
+- `DSH Desktop.exe`：GUI 程序本体（没有控制台窗口），也能直接拷走用。
+
+没装 NSIS 时 `mygo build` 第一次会自己下载到 `%LOCALAPPDATA%\mygo`。dsh 用 npm 全局装的那个（`%APPDATA%\npm\dsh.cmd`，或 PATH 里的 `dsh`），需要系统里有 Node；窗口用系统自带的 WebView2（Windows 10/11 一般都有）。
+
 ## 开发
 
 ```bash
@@ -40,7 +51,9 @@ AppImage 和 install.sh 装的版本别同时用：它们共用设置和单实�
 go test ./...
 ```
 
-开发版和安装版共用同一份设置和窗口状态（`~/.config/dsh-desktop/`），也共用单实例锁：同时只能开一个。
+Windows 上直接双击 `启动.sh`（装了 Git for Windows 时 `.sh` 默认由 Git Bash 打开；双击 `.ps1` 默认只会用记事本打开），或者在终端里跑 `powershell -ExecutionPolicy Bypass -File .\启动.ps1`。两者都会按需重编译，编成 GUI 程序（`-H=windowsgui`）后在后台启动、脚本立即返回，日志看 `app.log`。直接 `go build` 出来的是控制台程序，启动会带一个黑框，关掉黑框程序也退出。两个 `.ps1` 是带 BOM 的 UTF-8（Windows PowerShell 5.1 不认无 BOM 的 UTF-8，中文会乱码），改的时候别把 BOM 弄丢。
+
+开发版和安装版共用同一份设置和窗口状态（`~/.config/dsh-desktop/`，Windows 是 `%APPDATA%\dsh-desktop\`），也共用单实例锁：同时只能开一个。
 
 ## 功能
 
@@ -84,10 +97,12 @@ dsh-desktop -dsh /path/to/dsh    # 指定 dsh 可执行文件
 | 处理 | 不这么做会怎样 |
 |---|---|
 | `dsh --profile <name> --port … --no-open`，`--profile` 放最前 | 写成 `dsh web … --profile x` 时，`--profile` 被透传给 web 应用，dsh 报 `unknown option '--profile'` 直接退出（早期版本的 `-profile` 参数就是这么坏的） |
-| `stdbuf -oL -eL` 启动 dsh | dsh 的 stdout 是块缓冲，接管道时 token 那行**永远读不到**，等到超时。终端里手动跑却正常，极难复现 |
+| `stdbuf -oL -eL` 启动 dsh（Linux） | dsh 的 stdout 是块缓冲，接管道时 token 那行**永远读不到**，等到超时。终端里手动跑却正常，极难复现。Windows 没有 stdbuf，也不需要（实测直接能读到） |
 | 轮询到 `303 + Set-Cookie` 才算就绪 | dsh 先 bind 端口再拉后端，中间请求全是 502。只看端口 open 会打开一个能渲染但连不上后端的页面 |
 | 启动前补 `NO_PROXY` | 环境里只有 `HTTP_PROXY` 时，WebKit 把 `ws://127.0.0.1` 也走代理：HTTP 能转发、WebSocket 握手被吞，界面正常但一直重连、发不出消息 |
 | 独立进程组 + 负 PID 回收 | dsh 带一串 node 子进程，只杀父进程会留孤儿占着端口和 profile 锁。启动失败、dsh 自己崩了也要回收整组 |
+| Windows：dsh 放进 Job Object（`KILL_ON_JOB_CLOSE`），回收 = 终止整个 job | Windows 没有进程组信号；npm 装的 `dsh.cmd` 是 cmd.exe → node 两层，只杀 cmd.exe 会留下 node。job 句柄由壳持有，壳被任务管理器强杀时系统关句柄，dsh 也跟着走 |
+| Windows：子进程带 `CREATE_NO_WINDOW` | 打包版是 GUI 程序，没有控制台；cmd.exe / node 启动时会各自弹一个黑窗口 |
 | 拿到 token 后继续读 stdout | 不读的话管道 64KB 写满，dsh 往 stdout 写日志时阻塞，用一阵子后界面突然卡死。输出用 `os.Pipe` 自管，别用 `StdoutPipe`（node 子进程继承写端，Wait 语义会出问题） |
 | 托盘对象存进包级变量 `appTray` | MyGo 的菜单注册表只存**弱引用**，Linux 托盘后端也不持有 Go 侧的 `*Tray`。不留引用的话 GC 一跑菜单项就没了：刚启动时点菜单正常，过一会儿点了静默无反应 |
 | AppImage 的 AppRun 用 `exec -a dsh-desktop` | AppImage 运行时传进来的 argv[0] 是镜像文件名，GTK 拿它当程序名：窗口 WM_CLASS / Wayland app_id 成了 `DSH_Desktop-0.1.1-x86_64.AppImage`，任务栏对不上桌面条目、显示成通用图标，换版本号还会变 |
@@ -96,6 +111,7 @@ dsh-desktop -dsh /path/to/dsh    # 指定 dsh 可执行文件
 ## 已知限制
 
 - **单实例**：用 MyGo 的 `RequestSingleInstanceLock`（`$XDG_RUNTIME_DIR` 下的 unix socket）。第二个实例的普通参数只记日志、不生效——想换 profile/端口得先关掉已有窗口；`dsh://` 链接会转交给已有实例处理。
+- **Windows 上回收 dsh 是直接终止**：没有 SIGTERM，没控制台的 node 也收不到 Ctrl+Break，dsh 没有机会自己收尾。只在本机（Windows 10 LTSC 21H2 + dsh 0.2.0-rc.2）验证过启动、加载界面、强杀壳时 dsh 一起退出；托盘、通知、`dsh://`、安装包装好后的行为没逐项实测。
 - **端口动态**：JWT 里的 `authority` 绑定了端口，换端口旧 cookie 立即失效，所以每次启动都要重新走 token。
 - **托盘（Linux）**：AppIndicator 没有单击事件，点图标只会弹菜单，所以「显示窗口」放在菜单第一项。
 - **窗口位置（Wayland）**：Wayland 不允许应用自己摆位置，原生 Wayland 下只能记住大小和最大化状态，位置由合成器决定（没在本机专门验证）。
@@ -109,6 +125,8 @@ dsh-desktop -dsh /path/to/dsh    # 指定 dsh 可执行文件
 ```
 main.go        窗口、单实例、启动/崩溃重启/重试的守护循环
 dsh.go         dsh 进程：启动、输出泵、等 token / 就绪、进程组回收
+proc_unix.go   Linux/macOS：stdbuf、进程组
+proc_windows.go  Windows：Job Object、隐藏控制台、dsh.cmd 查找
 pages.go       加载页、报错页（本地 HTML）
 tray.go        托盘菜单（状态行、profile 子菜单、通知 / dsh:// 开关）、关窗收进托盘的提示
 status.go      托盘状态：会话计数 + dsh 是否在跑 → 角标颜色、状态行
@@ -122,6 +140,7 @@ tools/genicon/     生成 resources/icon.png
 mygo.json      打包配置（名字、版本、桌面条目、deb 依赖）
 启动.sh        开发启动：源码比二进制新就自动重编译
 打包.sh        打包：生成图标 + mygo build + AppImage → dist/
+启动.ps1 / 打包.ps1  Windows 版的开发启动 / 打包
 ```
 
 依赖：`github.com/egoist/mygo v0.6.3`、`github.com/klauspost/compress`（解 zstd）、dsh 本体（`/usr/bin/dsh`）、WebKitGTK 运行时；托盘可选依赖 `libayatana-appindicator3`。

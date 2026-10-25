@@ -15,7 +15,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 )
 
@@ -25,6 +24,7 @@ var tokenRe = regexp.MustCompile(`(http://(?:127\.0\.0\.1|localhost):\d+/\?token
 // dshProc 是一个运行中的 dsh web 进程（及其整个进程组）。
 type dshProc struct {
 	cmd      *exec.Cmd
+	group    *procGroup    // dsh 和它的 node 子进程，见 proc_unix.go / proc_windows.go
 	tokenCh  chan string   // 拿到带 token 的地址时写入一次
 	exited   chan struct{} // cmd.Wait 返回后关闭
 	exitErr  error         // exited 关闭后才可读
@@ -39,12 +39,9 @@ const tailLines = 40
 func startDsh(bin string, port int, profile string) (*dshProc, error) {
 	// --profile 必须在最前：`dsh web --port … --profile x` 里的 --profile 会被透传给
 	// web 应用，dsh 报 unknown option '--profile' 直接退出（见 profiles.go）
-	args := []string{"-oL", "-eL"} // stdbuf 参数
-	args = append(args, bin, "--profile", profile, "--port", fmt.Sprint(port), "--no-open")
-	cmd := exec.Command("stdbuf", args...)
+	// 行缓冲（stdbuf）和独立进程组按平台处理，见 dshCommand
+	cmd := dshCommand(bin, "--profile", profile, "--port", fmt.Sprint(port), "--no-open")
 	cmd.Env = append(os.Environ(), "NO_COLOR=1")
-	// 独立进程组：dsh 会再拉 node/pnpm 子进程，整组 kill 才干净
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	// 用 os.Pipe 而不是 StdoutPipe：StdoutPipe 要求读完才能 Wait，
 	// 而 node 子进程会继承写端，dsh 父进程退了管道也不一定 EOF。
@@ -73,6 +70,7 @@ func startDsh(bin string, port int, profile string) (*dshProc, error) {
 
 	p := &dshProc{
 		cmd:     cmd,
+		group:   newProcGroup(cmd),
 		tokenCh: make(chan string, 1),
 		exited:  make(chan struct{}),
 	}
@@ -137,7 +135,7 @@ func (p *dshProc) exitError() error {
 // Stop 回收整个进程组，可重复调用。
 func (p *dshProc) Stop() {
 	p.stopping.Store(true)
-	killGroup(p.cmd)
+	p.group.kill()
 }
 
 // WaitToken 等 dsh 在 stdout 打出带 token 的地址。
@@ -197,16 +195,14 @@ func (p *dshProc) WaitReady(ctx context.Context, authURL string, budget time.Dur
 
 func findDsh(path string) (string, error) {
 	if path != "" {
-		st, err := os.Stat(path)
+		// LookPath 对带目录的路径只做检查：Unix 看可执行位，Windows 按 PATHEXT 补 .cmd/.exe
+		p, err := exec.LookPath(path)
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("%s 不是可执行文件：%w", path, err)
 		}
-		if st.IsDir() || st.Mode()&0o111 == 0 {
-			return "", fmt.Errorf("%s 不是可执行文件", path)
-		}
-		return path, nil
+		return p, nil
 	}
-	for _, p := range []string{"/usr/bin/dsh", "/usr/local/bin/dsh"} {
+	for _, p := range dshCandidates() {
 		if st, err := os.Stat(p); err == nil && !st.IsDir() {
 			return p, nil
 		}
@@ -225,27 +221,6 @@ func freePort(start int) (int, error) {
 		}
 	}
 	return 0, fmt.Errorf("%d–%d 没有空闲端口，可用 -port 指定", start, start+99)
-}
-
-// killGroup 对整个进程组发信号：dsh 带一串 node 子进程，只杀父进程会留孤儿。
-// dsh 父进程已经退出时也要调：子进程还在同一个组里。
-func killGroup(cmd *exec.Cmd) {
-	if cmd.Process == nil {
-		return
-	}
-	pgid := -cmd.Process.Pid
-	if err := syscall.Kill(pgid, syscall.SIGTERM); err != nil {
-		return // 整组都没了
-	}
-	for i := 0; i < 50; i++ {
-		if err := syscall.Kill(pgid, 0); err != nil {
-			log.Println("dsh 进程组已退出")
-			return
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	log.Println("dsh 未响应 SIGTERM，强杀")
-	_ = syscall.Kill(pgid, syscall.SIGKILL)
 }
 
 var tokenParamRe = regexp.MustCompile(`token=[A-Za-z0-9_-]+`)

@@ -4,13 +4,13 @@
 // 壳层只负责三件事：把 dsh 拉起来、拿到带 token 的地址、开个原生窗口装进去。
 //
 // 启动器里踩过的坑都已经写进代码，改动时别删注释里的原因说明：
-//  1. stdbuf 强制行缓冲，否则读不到 token
+//  1. stdbuf 强制行缓冲，否则读不到 token（Linux；Windows 不需要）
 //  2. 轮询到 303 才算就绪，端口 open 时还是 502
 //  3. NO_PROXY 必须补，否则 WebSocket 被代理吞掉
-//  4. 独立进程组，退出时整组回收
+//  4. 独立进程组（Windows 上是 Job Object），退出时整组回收
 //  5. 拿到 token 后 stdout 也要一直读，否则管道写满 dsh 卡死
 //
-// 文件：main.go 窗口与生命周期，dsh.go 进程管理，pages.go 加载页/报错页，tray.go 托盘与图标，
+// 文件：main.go 窗口与生命周期，dsh.go 进程管理（平台相关部分在 proc_unix.go / proc_windows.go），pages.go 加载页/报错页，tray.go 托盘与图标，
 // profiles.go profile 列表与持久化，version.go dsh 版本兼容检查，
 // notify.go 会话事件 → 系统通知，deeplink.go dsh:// 链接。
 package main
@@ -397,7 +397,9 @@ func setupLog() string {
 	logPath := filepath.Join(logDir, "app.log")
 	log.SetFlags(log.Ltime)
 	if lf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
-		log.SetOutput(io.MultiWriter(os.Stderr, lf)) // 进程退出时由系统关闭
+		// 文件在前：Windows 的 GUI 程序（双击启动）没有控制台，写 stderr 必然失败，
+		// MultiWriter 遇到第一个错误就停，stderr 在前的话日志文件一行都写不进去。
+		log.SetOutput(io.MultiWriter(lf, os.Stderr)) // 进程退出时由系统关闭
 	} else {
 		fmt.Fprintf(os.Stderr, "日志文件打不开（%v），只输出到终端\n", err)
 	}

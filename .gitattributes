@@ -2,3 +2,5 @@
 * text=auto eol=lf
 *.png binary
 *.zstd binary
+# Windows PowerShell 5.1 用 CRLF 更顺手；文件本身是带 BOM 的 UTF-8
+*.ps1 text eol=crlf
